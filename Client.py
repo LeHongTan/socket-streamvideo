@@ -2,6 +2,7 @@ from tkinter import *
 import tkinter.messagebox
 from PIL import Image, ImageTk
 import socket, threading, sys, traceback, os
+import io
 
 from RtpPacket import RtpPacket
 
@@ -74,7 +75,8 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
-		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		# os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		# remove previous line because the program no longer load images from file
 
 	def pauseMovie(self):
 		"""Pause button handler."""
@@ -92,9 +94,16 @@ class Client:
 	
 	def listenRtp(self):		
 		"""Listen for RTP packets."""
+  
+		# waiting for server connection
+		conn, addr = self.rtpSocket.accept()
+		print(f"Connection established with {addr}")
+
 		while True:
 			try:
-				data = self.rtpSocket.recv(20480)
+				# data = self.rtpSocket.recv(204800) # <-- old: 20480 -> buff to 204800
+				data = conn.recv(204800) # use conn 
+    
 				if data:
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
@@ -104,7 +113,10 @@ class Client:
 										
 					if currFrameNbr > self.frameNbr: # Discard the late packet
 						self.frameNbr = currFrameNbr
-						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+						# self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+						self.updateMovie(rtpPacket.getPayload())
+				else:
+					break
 			except:
 				# Stop listening upon requesting PAUSE or TEARDOWN
 				if self.playEvent.isSet(): 
@@ -113,6 +125,7 @@ class Client:
 				# Upon receiving ACK for TEARDOWN request,
 				# close the RTP socket
 				if self.teardownAcked == 1:
+					conn.close() # close TCP
 					self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
 					break
@@ -126,10 +139,25 @@ class Client:
 		
 		return cachename
 	
-	def updateMovie(self, imageFile):
+	def updateMovie(self, data):
 		"""Update the image file as video frame in the GUI."""
-		photo = ImageTk.PhotoImage(Image.open(imageFile))
-		self.label.configure(image = photo, height=288) 
+		# photo = ImageTk.PhotoImage(Image.open(imageFile))
+		# self.label.configure(image = photo, height=288) 
+		# self.label.image = photo
+  
+		# use try to find errors
+		try:
+			# stream from RAM
+			image_stream = io.BytesIO(data)
+			image = Image.open(image_stream)
+			photo = ImageTk.PhotoImage(image) # conversion to Tkinter
+			self.label.after(0, self._updateLabel, photo)
+		except Exception as e:
+			print(f"Error updating frame: {e}")
+   
+	def _updateLabel(self, photo):
+		"""Helper method to update label in main thread."""
+		self.label.configure(image=photo, height=288) 
 		self.label.image = photo
 		
 	def connectToServer(self):
@@ -153,7 +181,7 @@ class Client:
 			self.rtspSeq = 1
             
 			# Write the RTSP request to be sent.
-			request = "SETUP " + str(self.fileName) + " RTSP/1.0\nCSeq: " + str(self.rtspSeq) + "\nTransport: RTP/UDP; client_port= " + str(self.rtpPort)
+			request = "SETUP " + str(self.fileName) + " RTSP/1.0\nCSeq: " + str(self.rtspSeq) + "\nTransport: TCP; client_port= " + str(self.rtpPort)
             
 			# Keep track of the sent request.
 			self.requestSent = self.SETUP
@@ -257,14 +285,19 @@ class Client:
 		# TO COMPLETE
 		#-------------
 		# Create a new datagram socket to receive RTP packets from the server
-		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		# self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # <-- use TCP
         
-        # Set the timeout value of the socket to 0.5sec
-		self.rtpSocket.settimeout(0.5)
+        # Set the timeout value of the socket to 0.5sec <- old
+		self.rtpSocket.settimeout(1.0) # <- buff time 
         
 		try:
             # Bind the socket to the address using the RTP port given by the client user
 			self.rtpSocket.bind(("", self.rtpPort))
+   
+			# 5 wait listen to server
+			self.rtpSocket.listen(5)
+			print(f"Listening for TCP connection on port {self.rtpPort}...")
 		except:
 			tkMessageBox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
 

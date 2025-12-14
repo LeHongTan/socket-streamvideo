@@ -76,10 +76,20 @@ class ServerWorker:
 				print("processing PLAY\n")
 				self.state = self.PLAYING
 				
-				# Create a new socket for RTP/UDP
-				self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+				# old: Create a new socket for RTP/UDP -> create for TCP
+				self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 				
-				self.replyRtsp(self.OK_200, seq[1])
+				# get address and IP of Client to connect
+				address = self.clientInfo['rtspSocket'][1][0]
+				port = int(self.clientInfo['rtpPort'])
+                
+                # connect to Client
+				try:
+					self.clientInfo['rtpSocket'].connect((address, port))
+				except:
+					print("Error connecting via TCP")
+    
+				self.replyRtsp(self.OK_200, seq[1])	
 				
 				# Create a new thread and start sending RTP packets
 				self.clientInfo['event'] = threading.Event()
@@ -110,7 +120,7 @@ class ServerWorker:
 	def sendRtp(self):
 		"""Send RTP packets over UDP."""
 		while True:
-			self.clientInfo['event'].wait(0.05) 
+			self.clientInfo['event'].wait(0.1) # <-- buff delay 0.05 -> 0.1
 			
 			# Stop sending if request is PAUSE or TEARDOWN
 			if self.clientInfo['event'].isSet(): 
@@ -120,22 +130,29 @@ class ServerWorker:
 			if data: 
 				frameNumber = self.clientInfo['videoStream'].frameNbr()
 				try:
-					address = self.clientInfo['rtspSocket'][1][0]
-					port = int(self.clientInfo['rtpPort'])
-					self.clientInfo['rtpSocket'].sendto(self.makeRtp(data, frameNumber),(address,port))
-				except:
-					print("Connection Error")
-					#print('-'*60)
-					#traceback.print_exc(file=sys.stdout)
-					#print('-'*60)
+					# address = self.clientInfo['rtspSocket'][1][0]
+					# port = int(self.clientInfo['rtpPort'])
+					# self.clientInfo['rtpSocket'].sendto(self.makeRtp(data, frameNumber),(address,port))
+					packet = self.makeRtp(data, frameNumber, 1) # merge data
+					self.clientInfo['rtpSocket'].sendall(packet)
+					import time
+					time.sleep(0.02)
+				# except:
+				# 	print("Connection Error")
+				# 	#print('-'*60)
+				# 	#traceback.print_exc(file=sys.stdout)
+				# 	#print('-'*60)
+				except Exception as e:
+					print("Connection Error or Stop:", e)
+					break
 
-	def makeRtp(self, payload, frameNbr):
+	def makeRtp(self, payload, frameNbr, marker=0):
 		"""RTP-packetize the video data."""
 		version = 2
 		padding = 0
 		extension = 0
 		cc = 0
-		marker = 0
+		# marker = 0
 		pt = 26 # MJPEG type
 		seqnum = frameNbr
 		ssrc = 0 
